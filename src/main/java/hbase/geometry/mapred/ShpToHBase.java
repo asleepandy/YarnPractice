@@ -31,19 +31,8 @@ import java.util.Map;
  */
 public class ShpToHBase {
 
-    /**
-     * default column family
-     * */
-    private final static String _column_family = "d";
-
-    public void connectDb() {
-
-    }
-
     public static void main(final String[] args) throws Exception {
-        Configuration conf = HBaseConfiguration.create(new Configuration());
-        conf.set("hbase.zookeeper.quorum", "vm1-64");
-        conf.setInt("hbase.zookeeper.property.clientPort", 2181);
+        Configuration conf = CommonSetting.getHbaseConf();
         String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
         if (otherArgs.length != 1) {
             System.err.println("Usage: shp2hbase <in> ");
@@ -57,6 +46,7 @@ public class ShpToHBase {
 //        Path p = new Path(filepath);
 //        FileSystem fs = p.getFileSystem(new Configuration());
         File file = new File(filepath);
+        file.setReadOnly();
 
         Map<String, Object> map = new HashMap<>();
         map.put(ShapefileDataStoreFactory.URLP.key, file.toURI().toURL());
@@ -79,7 +69,7 @@ public class ShpToHBase {
         TableName tn = TableName.valueOf(_tableName);
         if(!admin.tableExists(tn)) {
             HTableDescriptor desc = new HTableDescriptor(tn);
-            HColumnDescriptor coldef = new HColumnDescriptor(Bytes.toBytes(_column_family));
+            HColumnDescriptor coldef = new HColumnDescriptor(Bytes.toBytes(CommonSetting.default_column_family));
             desc.addFamily(coldef);
             admin.createTable(desc);
             System.out.println(String.format("HTable %s created.", _tableName));
@@ -91,7 +81,7 @@ public class ShpToHBase {
 
         // import feature into hbase
         int total = collection.size();
-        int flag = 0;
+        int flag = 0, percent = 0;
         System.out.println(String.format("Prepare import %d features.", total));
         long time = System.currentTimeMillis();
         try (FeatureIterator<SimpleFeature> features = collection.features()) {
@@ -100,25 +90,29 @@ public class ShpToHBase {
                 Put put = new Put(Bytes.toBytes(
                         String.format("%s", feature.getID()))
                 );
-                put.addColumn(Bytes.toBytes(_column_family), Bytes.toBytes("the_geom"),
+                put.addColumn(Bytes.toBytes(CommonSetting.default_column_family), Bytes.toBytes("the_geom"),
                         Bytes.toBytes(feature.getDefaultGeometryProperty().getValue().toString())
                 );
                 for (Property attribute : feature.getProperties()) {
-                    put.addColumn(Bytes.toBytes(_column_family),
+                    put.addColumn(Bytes.toBytes(CommonSetting.default_column_family),
                             Bytes.toBytes(attribute.getName().toString()),
                             Bytes.toBytes(attribute.getValue().toString())
                     );
                 }
                 batch.add(put);
 //                puts.add(put);
-                if(flag <= 8 && total/batch.size() == 10) {
-                    flag++;
+                if(batch.size() == 10000) {
+                    flag += batch.size();
 //                    table.put(puts);
 //                    puts.clear();
                     try {
                         result = new Object[batch.size()];
                         table.batch(batch, result);
-                        System.out.println(String.format("%d%%",flag*10));
+                        int p = flag*100/total;
+                        if(p > 0 && p != percent) {
+                            percent = p;
+                            System.out.println(String.format("%d%%", percent));
+                        }
                     } catch (Exception e) {
                         System.out.println(String.format("Batch error: %s", e.toString()));
                     } finally {
@@ -130,6 +124,7 @@ public class ShpToHBase {
                 result = new Object[batch.size()];
                 table.batch(batch, result);
             }
+            features.close();
             time = System.currentTimeMillis() - time;
         }
 
@@ -138,5 +133,6 @@ public class ShpToHBase {
         batch.clear();
         table.close();
         conn.close();
+        dataStore.dispose();
     }
 }

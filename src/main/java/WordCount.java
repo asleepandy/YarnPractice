@@ -74,6 +74,10 @@ public class WordCount {
             @Override
             public Integer run() throws Exception {
                 Configuration conf = new Configuration();
+//                conf.addResource("resources/main/core-site.xml");
+//                conf.addResource("resources/main/hdfs-site.xml");
+//                conf.addResource("resources/main/mapred-site.xml");
+//                conf.addResource("resources/main/yarn-site.xml");
                 String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
                 if (otherArgs.length != 2) {
                     System.err.println("Usage: wordcount <in> <out>");

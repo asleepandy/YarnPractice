@@ -19,4 +19,5 @@ public class CommonSetting {
         conf.setInt("hbase.zookeeper.property.clientPort", 2181);
         return conf;
     }
+
 }

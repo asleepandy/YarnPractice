@@ -1,18 +1,19 @@
-package hbase.geometry.mapred;
+package hbase.geometry.improve.mapred;
 
+import hbase.CommonSetting;
+import hbase.filter.BoxQueryPointRowKeyFilter;
+import hbase.geometry.simple.GeometryRelationship;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
-import org.apache.hadoop.hbase.mapreduce.TableInputFormat;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mapreduce.TableMapper;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.MapWritable;
-import org.apache.hadoop.io.ObjectWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Reducer;
@@ -20,7 +21,6 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.util.GenericOptionsParser;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
-import org.opengis.feature.simple.SimpleFeature;
 
 import java.io.IOException;
 import java.util.NavigableMap;
@@ -31,7 +31,7 @@ import java.util.NavigableMap;
 public class Query extends Configured implements Tool {
     private static String params_geom_key = "geometry_src";
 
-    public static class MyMapper extends TableMapper<Text, MapWritable> {
+    private static class MyMapper extends TableMapper<Text, MapWritable> {
 
         private Text text = new Text();
 
@@ -40,7 +40,11 @@ public class Query extends Configured implements Tool {
                 throws IOException, InterruptedException {
             Configuration conf = context.getConfiguration();
             String params_geom_in_wkt = conf.get(params_geom_key);
-            String the_geom_in_wkt = new String(value.getValue(Bytes.toBytes("d"), Bytes.toBytes("the_geom")));
+            String the_geom_in_wkt = new String(value.getValue(
+                    Bytes.toBytes(CommonSetting.geometry_column_family),
+                    Bytes.toBytes(CommonSetting.geometry_column)
+            ));
+
             if(GeometryRelationship.within(params_geom_in_wkt, the_geom_in_wkt)) {
 //                SimpleFeature f = GeometryRelationship.parseHBaseRow(conf.get(TableInputFormat.INPUT_TABLE), value);
                 NavigableMap<byte[], byte[]> map = value.getFamilyMap(
@@ -52,6 +56,7 @@ public class Query extends Configured implements Tool {
                             Bytes.toBytes(CommonSetting.default_column_family), Bytes.toBytes(k.toString())));
                     mw.put(k, v);
                 }
+                mw.put(new Text(CommonSetting.geometry_column), new Text(the_geom_in_wkt));
 
                 text.set(row.get());
                 context.write(text, mw);
@@ -59,7 +64,7 @@ public class Query extends Configured implements Tool {
         }
     }
 
-    public static class MyReducer extends Reducer<Text, MapWritable, Text, Text> {
+    private static class MyReducer extends Reducer<Text, MapWritable, Text, Text> {
 
         private Text oValue = new Text();
 
@@ -94,7 +99,10 @@ public class Query extends Configured implements Tool {
         job.setJarByClass(Query.class);
 
         Scan scan = new Scan();
-        scan.setCaching(500);
+        //scan rowkey by custom filter (by centroid)
+        Filter filter = new BoxQueryPointRowKeyFilter(otherArgs[0]);
+        scan.setFilter(filter);
+        scan.setCaching(256);
         scan.setCacheBlocks(false);
 
         TableMapReduceUtil.initTableMapperJob(

@@ -1,14 +1,18 @@
-package hbase.geometry.mapred;
+package hbase.geometry.simple;
 
 import com.vividsolutions.jts.geom.Geometry;
 import com.vividsolutions.jts.geom.GeometryFactory;
+import com.vividsolutions.jts.geom.PrecisionModel;
 import com.vividsolutions.jts.io.ParseException;
 import com.vividsolutions.jts.io.WKTReader;
+import hbase.CommonSetting;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.geotools.feature.simple.SimpleFeatureBuilder;
 import org.geotools.feature.simple.SimpleFeatureTypeBuilder;
-import org.geotools.geometry.jts.JTSFactoryFinder;
+//import org.geotools.geometry.jts.JTSFactoryFinder;
 import org.geotools.referencing.crs.DefaultGeographicCRS;
 import org.opengis.feature.simple.SimpleFeature;
 import org.opengis.feature.simple.SimpleFeatureType;
@@ -20,12 +24,13 @@ import java.util.NavigableMap;
 /**
  * Util for geometry relation query
  */
-class GeometryRelationship {
+public class GeometryRelationship {
     private static String ploygon_sample = "PLOYGON((121.5234 250574, 121.5674 25.0552, 121.5802 25.0261, 121.5099 25.0361, 121.5234 250574))";
 
-    private static GeometryFactory gf = JTSFactoryFinder.getGeometryFactory(null);
-    private static WKTReader reader = new WKTReader(gf);
     private static Map<String, SimpleFeatureType> featureTypeMap = new HashMap<>();
+    private static final GeometryFactory gf = new GeometryFactory(new PrecisionModel(), 4326);
+    private static final WKTReader reader = new WKTReader(gf);
+    private static final Log LOG = LogFactory.getLog(GeometryRelationship.class);
 
     /**
      * Tests whether geometry w2 is within geometry w1.
@@ -38,7 +43,7 @@ class GeometryRelationship {
             Geometry g2 = reader.read(w2);
             return g2.within(g1);
         } catch (ParseException e) {
-            e.printStackTrace();
+            LOG.error("Unexpected throwable object ", e);
             return false;
         }
     }
@@ -50,7 +55,7 @@ class GeometryRelationship {
         try {
             return reader.read(WKT);
         } catch (ParseException e) {
-            e.printStackTrace();
+            LOG.error("Unexpected throwable object ", e);
             return null;
         }
     }
@@ -91,7 +96,7 @@ class GeometryRelationship {
                     f.setAttribute(k, v);
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            LOG.error("Unexpected throwable object ", e);
         }
         return f;
     }

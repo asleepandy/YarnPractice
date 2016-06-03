@@ -1,7 +1,10 @@
-package hbase.geometry.mapred;
+package hbase.geometry.improve;
 
+import com.vividsolutions.jts.geom.Envelope;
+import com.vividsolutions.jts.geom.Geometry;
+import com.vividsolutions.jts.geom.Point;
+import hbase.CommonSetting;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.TableName;
@@ -20,16 +23,57 @@ import org.opengis.feature.simple.SimpleFeatureType;
 import org.opengis.filter.Filter;
 
 import java.io.File;
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
- * Util for shapefile import HBase
+ * Util for shapefile import HBase<br>
+ * feature:<br>
+ *     1. geometry data place in single column family,
+ *     and general attributes in another default column family.<br>
+ *
  */
 public class ShpToHBase {
+
+    public static byte[] genRowKeyByCentroid(Point centerXY, String type, int timestamp) {
+        ByteBuffer bb = ByteBuffer.allocate(24);
+        byte[] b = new byte[1];
+        new Random().nextBytes(b);
+        bb.put(b);
+        bb.put(CommonSetting.GEOMETRY_TYPE_KEYMAP.get(type).getBytes());
+
+        double lon = centerXY.getX();
+        bb.put((lon >= 0?"E":"W").getBytes());
+        bb.putDouble(lon);
+
+        double lat = centerXY.getY();
+        bb.put((lat >= 0?"N":"S").getBytes());
+        bb.putDouble(lat);
+
+        bb.putInt(timestamp);
+        b = bb.array();
+        bb.clear();
+        return b;
+    }
+
+    public static byte[] genRowKeyByEnvelope(Envelope box, String type, int timestamp) {
+        ByteBuffer bb = ByteBuffer.allocate(40);
+        byte[] b = new byte[1];
+        new Random().nextBytes(b);
+        bb.put(b);
+        bb.put(CommonSetting.GEOMETRY_TYPE_KEYMAP.get(type).getBytes());
+        bb.putInt(timestamp);
+        bb.putDouble(box.getMinX());
+        bb.putDouble(box.getMinY());
+        bb.putDouble(box.getMaxX());
+        bb.putDouble(box.getMaxY());
+        bb.put("00".getBytes());
+
+        b = bb.array();
+        bb.clear();
+        return b;
+    }
 
     public static void main(final String[] args) throws Exception {
         Configuration conf = CommonSetting.getHbaseConf();
@@ -42,9 +86,6 @@ public class ShpToHBase {
         // resolve shp
         System.out.println("Resolving...");
         String filepath = otherArgs[0];
-//        String filepath = "/Users/andy.lai/Documents/vagrant_img/virtual-hadoop-cluster/shp/points.shp";
-//        Path p = new Path(filepath);
-//        FileSystem fs = p.getFileSystem(new Configuration());
         File file = new File(filepath);
         file.setReadOnly();
 
@@ -60,24 +101,25 @@ public class ShpToHBase {
         FeatureCollection<SimpleFeatureType, SimpleFeature> collection = source.getFeatures(filter);
 
         // hbase connection init
-        String _tableName = file.getName().split("\\.")[0];
-        if(_tableName.isEmpty()) _tableName = String.format("%s_%d", typeName, file.length());
         Connection conn = ConnectionFactory.createConnection(conf);
         System.out.println("HBase connected.");
+
+        // set table name same with file name
+        String _tableName = file.getName().split("\\.")[0];
+        if(_tableName.isEmpty()) _tableName = String.format("%s_%d", typeName, file.length());
 
         Admin admin = conn.getAdmin();
         TableName tn = TableName.valueOf(_tableName);
         if(!admin.tableExists(tn)) {
             HTableDescriptor desc = new HTableDescriptor(tn);
-            HColumnDescriptor coldef = new HColumnDescriptor(Bytes.toBytes(CommonSetting.default_column_family));
-            desc.addFamily(coldef);
+            desc.addFamily(new HColumnDescriptor(Bytes.toBytes(CommonSetting.default_column_family)));
+            desc.addFamily(new HColumnDescriptor(Bytes.toBytes(CommonSetting.geometry_column_family)));
             admin.createTable(desc);
             System.out.println(String.format("HTable %s created.", _tableName));
         }
         Table table = conn.getTable(tn);
         List<Row> batch = new ArrayList<>();
         Object[] result = null;
-//        List<Put> puts = new ArrayList<>();
 
         // import feature into hbase
         int total = collection.size();
@@ -87,13 +129,20 @@ public class ShpToHBase {
         try (FeatureIterator<SimpleFeature> features = collection.features()) {
             while (features.hasNext()) {
                 SimpleFeature feature = features.next();
-                Put put = new Put(Bytes.toBytes(
-                        String.format("%s", feature.getID()))
-                );
-                put.addColumn(Bytes.toBytes(CommonSetting.default_column_family), Bytes.toBytes("the_geom"),
-                        Bytes.toBytes(feature.getDefaultGeometryProperty().getValue().toString())
+                Geometry geom = (Geometry) feature.getDefaultGeometryProperty().getValue();
+                String type = geom.getGeometryType();
+                byte[] rowKey = "Point".equals(type) ?
+                        genRowKeyByCentroid(geom.getCentroid(), type, (int)(System.currentTimeMillis()/1000L)):
+                        genRowKeyByEnvelope(geom.getEnvelopeInternal(), type, (int)(System.currentTimeMillis()/1000L));
+
+                Put put = new Put(rowKey);
+                put.addColumn(Bytes.toBytes(CommonSetting.geometry_column_family),
+                        Bytes.toBytes(CommonSetting.geometry_column),
+                        Bytes.toBytes(geom.toString())
                 );
                 for (Property attribute : feature.getProperties()) {
+                    if("the_geom".equals(attribute.getName().toString())) continue;
+
                     put.addColumn(Bytes.toBytes(CommonSetting.default_column_family),
                             Bytes.toBytes(attribute.getName().toString()),
                             Bytes.toBytes(attribute.getValue().toString())
